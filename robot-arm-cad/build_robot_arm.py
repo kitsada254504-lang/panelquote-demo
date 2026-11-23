@@ -41,24 +41,30 @@ except Exception:
 PARAMS = dict(
     # โครงฐาน
     base_w=450.0, base_d=450.0, prof=40.0, prof_wall=4.0, foot_h=30.0, foot_d=40.0, inner_x=100.0,
+    bp_w=220.0, bp_d=220.0, bp_t=10.0,          # แผ่นฐาน 220x220 ใต้เสา (ตามรูป)
     # เสา 4080
-    col_w=80.0, col_d=40.0, col_len=1300.0, col_wall=4.0,
+    col_w=80.0, col_d=40.0, col_len=1500.0, col_wall=4.0,
     # รางเลื่อน HGR15 + บล็อก (บล็อกโมเดลเฉพาะส่วนเหนือหัวราง)
     rail_len=1300.0, rail_w=15.0, rail_h=15.0, rail_x=25.0,
-    blk_len=62.4, blk_w=34.0, blk_top=28.0, blk_dv=150.0, rail_margin=10.0,
+    blk_len=62.4, blk_w=34.0, blk_top=28.0, blk_dv=130.0, rail_margin=10.0,
     # ช่วงชัก Z และตำแหน่งตอนสร้าง (0 = ล่างสุด, 1 = บนสุด)
     stroke=900.0, home_frac=0.5, clear_table=20.0,
     # แผ่นแคร่และแท่นรับแขน
-    plate_w=160.0, plate_h=250.0, plate_t=10.0, plat_w=200.0, plat_d=200.0, plat_t=10.0,
+    plate_w=160.0, plate_h=200.0, plate_t=10.0, plat_w=200.0, plat_d=200.0, plat_t=10.0,
     # เฟืองสะพาน M1.5 15x15 และพิเนียน (โมเดลที่ขนาดรากฟัน ไม่มีฟัน กันชนเทียม)
     rack_h=15.0, rack_w=15.0, rack_len=1000.0, mod=1.5, pin_z=20, pin_face=20.0, shaft_d=14.0,
     # มอเตอร์/เกียร์ NEMA23 (A1-A3)
     gb_sq=60.0, gb_len=62.0, m23_sq=56.4, m23_len=82.0, brake_d=70.0, brake_len=30.0, gb_dy=60.0,
     # ข้อหมุน A2, A3
-    brg_d=150.0, brg_h=20.0, hub_d=110.0, hub_h=30.0, L1=300.0, L2=250.0, link_ext=20.0,
+    brg_d=150.0, brg_h=20.0, hub_d=110.0, hub_h=30.0, L1=550.0, L2=450.0, link_ext=20.0,
+    # ลิงก์ 1 = 8020 (ตามรูป: วาง 80 ตั้ง 20 กว้าง ต้านการแอ่งจากน้ำหนัก) / ลิงก์ 2 ใช้ 4040 (รูปไม่ระบุ ต้องยืนยัน)
+    link1_x=20.0, link1_y=80.0, link1_wall=3.0,
     # A4 (NEMA17) และกริปเปอร์
     gb17_sq=42.0, gb17_len=45.0, m17_len=48.0,
     grip_w=60.0, grip_h=130.0, grip_d=60.0, finger_t=12.0, finger_h=50.0, finger_d=16.0, grip_open=60.0,
+    # ค่าใช้ในการวิเคราะห์โหลด (ไม่มีผลต่อรูปทรง)
+    payload=1.0, E_gpa=70.0, motor_T=3.0, motor_derate=0.5,
+    a2_ratio=10.0, a3_ratio=10.0, gear_eff=0.8, alpha=5.0,
 )
 
 DENSITY = {"AL6061": 2.70, "STEEL": 7.85, "PLACEHOLDER": 7.85}   # g/cm3
@@ -123,17 +129,17 @@ class Part(object):
 def derive(p):
     d = {}
     d["frame_top"] = p["foot_h"] + p["prof"]
-    d["rail_bot"] = d["frame_top"]
+    d["rail_bot"] = d["frame_top"] + p["bp_t"]        # เสาตั้งบนแผ่นฐาน
     half = p["rail_margin"] + p["blk_len"] / 2.0 + p["blk_dv"] / 2.0
     d["yc_rail_min"] = d["rail_bot"] + half
     d["yc_rail_max"] = d["rail_bot"] + p["rail_len"] - half
     # ลึกจาก y_c ถึงปลายนิ้วกริปเปอร์
     y_p_rel = -p["plate_h"] / 2.0 + p["plat_t"]
-    link1_top_rel = y_p_rel + p["brg_h"] + p["hub_h"] + p["prof"]
+    link1_top_rel = y_p_rel + p["brg_h"] + p["hub_h"] + p["link1_y"]
     link2_bot_rel = link1_top_rel + p["brg_h"] + p["hub_h"]
     d["tip_rel"] = link2_bot_rel - p["grip_h"] - p["finger_h"]
     d["yc_low"] = max(d["yc_rail_min"],
-                      d["frame_top"] + p["plate_h"] / 2.0 + 10.0,
+                      d["rail_bot"] + p["plate_h"] / 2.0 + 10.0,
                       -d["tip_rel"] + p["clear_table"])
     d["stroke_max"] = d["yc_rail_max"] - d["yc_low"]
     d["yc"] = d["yc_low"] + p["home_frac"] * p["stroke"]
@@ -179,6 +185,11 @@ def build_design(P):
     for i, (x, z) in enumerate(((-sx, zr), (sx, zr), (-sx, zf), (sx, zf)), 1):
         add("foot_%d" % i, "foot", "cyl", (x, p["foot_h"] / 2.0, z), "STEEL", "frame", "ขาปรับระดับ M10",
             0.08, dia=p["foot_d"], length=p["foot_h"], axis="Y")
+
+    # ---- แผ่นฐาน 220x220 ใต้เสา (วางบนโปรไฟล์ฐาน: ท้ายแผ่นชนขอบหลังของโครง) ----
+    add("column_base_plate", "base_plate", "prism",
+        (0, d["frame_top"] + p["bp_t"] / 2.0, -pw + p["bp_d"] / 2.0), "AL6061", "static",
+        "แผ่นฐานใต้เสา 220x220 (ยังไม่เจาะรู)", dims=(p["bp_w"], p["bp_t"], p["bp_d"]), axis="Y", wall=None)
 
     # ---- เสา 4080 + ราง + เฟืองสะพาน ----
     add("column", "column", "prism", (0, d["rail_bot"] + p["col_len"] / 2.0, -p["col_d"] / 2.0), "AL6061", "static",
@@ -238,9 +249,10 @@ def build_design(P):
             "มอเตอร์ NEMA23", 1.2, dims=(p["m23_sq"], p["m23_len"], p["m23_sq"]), axis="Y", wall=None)
 
     l1_bot = joint("a2", zA2, y_p)
-    add("link1", "link1", "prism", (0, l1_bot + pw / 2.0, zA2 + p["L1"] / 2.0), "AL6061", "Z",
-        "ลิงก์ 1 โปรไฟล์ 4040", dims=(pw, pw, p["L1"] + 2 * p["link_ext"]), axis="Z", wall=w)
-    l1_top = l1_bot + pw
+    add("link1", "link1", "prism", (0, l1_bot + p["link1_y"] / 2.0, zA2 + p["L1"] / 2.0), "AL6061", "Z",
+        "ลิงก์ 1 โปรไฟล์ 8020 (วาง 80 ตั้ง)",
+        dims=(p["link1_x"], p["link1_y"], p["L1"] + 2 * p["link_ext"]), axis="Z", wall=p["link1_wall"])
+    l1_top = l1_bot + p["link1_y"]
     drive_y("a2", zA2, l1_top, 1.2)
 
     zA3 = zA2 + p["L1"]
@@ -290,6 +302,70 @@ def find_overlaps(parts, tol=0.01):
     return out
 
 
+def analyze(parts, d, p, log):
+    """วิเคราะห์โหลดคร่าว ๆ จากมวลและตำแหน่งใน layout (ท่า home แขนเหยียดตรง) คืนค่าเป็น dict"""
+    g = 9.81
+    by = dict((pt.name, pt) for pt in parts)
+    tip = by["gripper_body"]
+    pay = p["payload"]
+    pts = [(pt.mass_kg(), pt.center) for pt in parts] + [(pay, (0.0, tip.center[1], tip.center[2]))]
+    r = {}
+    r["mass_total"] = sum(m for m, _ in pts)
+    # พลิกคว่ำรอบขอบหน้าของขาตั้ง
+    edge = p["base_d"] - 1.5 * p["prof"] + p["foot_d"] / 2.0
+    r["M_over"] = sum(m * g * (c[2] - edge) / 1000.0 for m, c in pts if c[2] > edge)
+    r["M_stab"] = sum(m * g * (edge - c[2]) / 1000.0 for m, c in pts if c[2] <= edge)
+    r["SF_tip"] = r["M_stab"] / r["M_over"] if r["M_over"] > 0 else float("inf")
+    # โมเมนต์ที่คาร์เรจ (รอบแกนกลางเสา) และการแอ่งของเสา (ดัดรอบแกนอ่อน = ความลึก col_d)
+    zg = [(pt.mass_kg(), pt.center) for pt in parts if pt.group == "Z"] + [(pay, (0.0, tip.center[1], tip.center[2]))]
+    r["m_Z"] = sum(m for m, _ in zg)
+    r["M_car"] = sum(m * g * (c[2] + p["col_d"] / 2.0) / 1000.0 for m, c in zg)
+    w_, dd, t = p["col_w"], p["col_d"], p["col_wall"]
+    I_mm4 = (w_ * dd ** 3 - (w_ - 2 * t) * (dd - 2 * t) ** 3) / 12.0
+    r["I_col_cm4"] = I_mm4 / 1e4
+    EI = p["E_gpa"] * 1e9 * I_mm4 * 1e-12
+    reach = (p["L1"] + p["L2"]) / 1000.0
+    a_mid = (d["yc"] - d["rail_bot"]) / 1000.0
+    a_top = a_mid + p["stroke"] / 2000.0
+    r["droop_mid_mm"] = r["M_car"] * a_mid / EI * reach * 1000.0
+    r["droop_top_mm"] = r["M_car"] * a_top / EI * reach * 1000.0
+    # ข้อหมุน A2, A3  (มวลลิงก์จากโมเดล)
+    L1, L2 = p["L1"] / 1000.0, p["L2"] / 1000.0
+    ml1, ml2 = by["link1"].mass_kg(), by["link2"].mass_kg()
+    mA3 = sum(by["a3_" + k].mass_kg() for k in ("motor", "gearbox", "bearing"))
+    mend = (by["a4_motor"].mass_kg() + by["a4_gearbox"].mass_kg() + by["gripper_body"].mass_kg()
+            + by["finger_L"].mass_kg() + by["finger_R"].mass_kg() + pay)
+    I2 = ml1 * L1 ** 2 / 3 + mA3 * L1 ** 2 + ml2 * (L1 ** 2 + L1 * L2 + L2 ** 2 / 3) + mend * (L1 + L2) ** 2
+    I3 = ml2 * L2 ** 2 / 3 + mend * L2 ** 2
+    avail = p["motor_T"] * p["motor_derate"]
+    r["I_A2"], r["I_A3"] = I2, I3
+    for tag, I_, ratio in (("A2", I2, p["a2_ratio"]), ("A3", I3, p["a3_ratio"])):
+        T = I_ * p["alpha"] / ratio / p["gear_eff"]
+        r["T_" + tag] = T
+        r["SF_" + tag] = avail / T
+        amax = avail / 2.0 * ratio * p["gear_eff"] / I_
+        r["alpha_max_" + tag] = amax
+        r["t90_" + tag] = 2.0 * math.sqrt((math.pi / 2.0) / amax)
+    r["alpha_max_A2_x2"] = r["alpha_max_A2"] * 2.0          # ถ้าเกียร์ A2 ทดเพิ่มเป็น 2 เท่า
+    r["Mb_A2"] = (ml1 * L1 / 2 + mA3 * L1 + ml2 * (L1 + L2 / 2) + mend * (L1 + L2)) * g
+    r["Mb_A3"] = (ml2 * L2 / 2 + mend * L2) * g
+    log("-" * 78)
+    log("วิเคราะห์โหลดคร่าว ๆ (ท่า home แขนเหยียดตรง / มวลเป็นค่าประเมิน)")
+    log("  มวลเครื่องรวม (รวม payload %.1f kg) = %.1f kg" % (pay, r["mass_total"]))
+    log("  พลิกคว่ำรอบขอบหน้า z=%.0f: โมเมนต์พลิก %.1f N·m / ต้าน %.1f N·m = %.2f เท่า (ต้องการ >= 2)"
+        % (edge, r["M_over"], r["M_stab"], r["SF_tip"]))
+    log("  แคร่ Z: มวลที่ยก %.1f kg โมเมนต์รอบแกนเสา %.1f N·m" % (r["m_Z"], r["M_car"]))
+    log("  เสา I(แกนอ่อน)=%.1f cm4: ปลายแขนตกจากการแอ่งของเสา ≈ %.1f mm (กลางช่วงชัก) / %.1f mm (บนสุด)"
+        % (r["I_col_cm4"], r["droop_mid_mm"], r["droop_top_mm"]))
+    for tag, ratio in (("A2", p["a2_ratio"]), ("A3", p["a3_ratio"])):
+        log("  %s เกียร์ %.0f:1  I=%.2f kg·m²  ที่ α=%.1f rad/s² ต้องการ %.2f N·m (ใช้ได้ %.2f) ปลอดภัย %.2f เท่า"
+            % (tag, ratio, r["I_" + tag], p["alpha"], r["T_" + tag], avail, r["SF_" + tag]))
+        log("      α สูงสุดที่ยังปลอดภัย 2 เท่า = %.2f rad/s²  (หมุน 90° ≈ %.1f วินาที)"
+            % (r["alpha_max_" + tag], r["t90_" + tag]))
+    log("  โมเมนต์สถิตที่ลูกปืน A2 = %.1f N·m, A3 = %.1f N·m (เทียบพิกัดใน datasheet)" % (r["Mb_A2"], r["Mb_A3"]))
+    return r
+
+
 def report(parts, d, p, log):
     log("=" * 78)
     log("สรุป layout (หน่วย mm / kg)")
@@ -313,7 +389,7 @@ def report(parts, d, p, log):
             "%.1f×%.1f×%.1f" % s, "%.1f,%.1f,%.1f" % pt.center, pt.mass_kg()))
 
 
-def export_files(parts, d, p, outdir):
+def export_files(parts, d, p, outdir, analysis=None):
     os.makedirs(outdir, exist_ok=True)
     with open(os.path.join(outdir, "BOM_layout.csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
@@ -322,7 +398,7 @@ def export_files(parts, d, p, outdir):
             w.writerow([pt.name, pt.file + ".SLDPRT", pt.kind] + ["%.2f" % v for v in pt.center]
                        + ["%.1f×%.1f×%.1f" % pt.size(), pt.material, "%.3f" % pt.mass_kg(), pt.group, pt.note])
     with open(os.path.join(outdir, "params_used.json"), "w", encoding="utf-8") as f:
-        json.dump({"params": p, "derived": d}, f, ensure_ascii=False, indent=2)
+        json.dump({"params": p, "derived": d, "analysis": analysis}, f, ensure_ascii=False, indent=2)
 
 
 # --------------------------------------------------------------------------
@@ -527,7 +603,8 @@ def main(argv=None):
             log("ผิดพลาด: " + e)
         return 2
     report(parts, d, P, log)
-    export_files(parts, d, P, outdir)
+    analysis = analyze(parts, d, P, log)
+    export_files(parts, d, P, outdir, analysis)
 
     ov = find_overlaps(parts)
     log("-" * 78)
